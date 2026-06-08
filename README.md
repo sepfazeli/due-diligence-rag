@@ -1,256 +1,252 @@
-# due-diligence-rag
+# Dealworthy
 
-A RAG-powered document analysis assistant for business due diligence.
+> **Know if it's worth it.**
 
-Upload a business's documents (financial statements, seller disclosures, listing
-details), ask a plain-language question, and get back a **grounded answer**, a
-list of **risk flags**, a short **financial summary**, and **citations** that
-point to the exact source document and page.
+AI-powered due diligence for small business acquisitions. Upload deal documents, ask plain-language questions, get back grounded answers, risk flags, a financial summary, and citations that point to the exact source.
 
-Every claim is traceable to a retrieved chunk. If retrieval quality is low, the
-assistant says **"I don't have enough information"** instead of guessing.
-
-> ⚠️ **Not financial or legal advice.** This is a diligence *assistant* that
-> surfaces and cites what is in your documents. It does not give advice.
+🔗 **Live at [dealworthy.tech](https://dealworthy.tech)**
 
 ---
 
-## Architecture overview
+## What it does
+
+You're evaluating a small business acquisition. You have PDFs (financials, seller disclosures, listing details), maybe a website URL, maybe a broker email. Dealworthy indexes all of it and lets you ask questions in plain English:
+
+> *"What are the main risks for this business?"*
+> *"How have revenue and margins trended over the last three years?"*
+> *"Is there customer concentration risk?"*
+
+Every answer is grounded in the documents you provided — with citations back to the exact source and page — or Dealworthy says *"I don't have enough information"* instead of guessing.
+
+---
+
+## Features
+
+- **Three ingestion modes** — PDF upload, URL import (any public page via Jina reader), or paste raw text
+- **Fully serverless pipeline** — no Python, no separate ingestion step; documents are parsed, chunked, and embedded in-process on upload
+- **Hybrid retrieval** — pgvector cosine similarity + Postgres full-text search, fused with Reciprocal Rank Fusion, then reranked by Cohere
+- **Structured analysis** — Claude returns strict JSON: answer prose, risk flags (red / amber), financial metrics, citations, confidence level
+- **Confidence guardrail** — if retrieval quality is below threshold the model is not called; you get an honest low-confidence response
+- **Dynamic suggestions** — example questions are generated from your actual indexed documents, not hardcoded
+- **Workspace isolation** — each visitor gets their own workspace ID; documents are scoped per workspace, nothing leaks between users
+- **Full theming** — light / dark / system mode + 5 accent colour presets; no flash on load (SSR-safe inline script)
+
+---
+
+## Architecture
 
 ```
-                ┌──────────────────────────────────────────────────────┐
-                │                  INGESTION (Python)                    │
-   PDFs  ─────▶ │  pdfplumber → table-aware chunking (tiktoken ~512/50) │
-   + listingId  │  → OpenAI embeddings (text-embedding-3-small)         │
-                │  → upsert chunks + metadata into Postgres             │
-                └───────────────────────────┬──────────────────────────┘
-                                             │
-                                  ┌──────────▼───────────┐
-                                  │  Neon Postgres        │
-                                  │  + pgvector(1536)     │
-                                  │  + tsvector full-text │
-                                  └──────────┬───────────┘
-                                             │
-                ┌────────────────────────────▼─────────────────────────┐
-                │                  APP (Next.js, App Router)             │
-   question ──▶ │  lib/retrieval.ts:  hybrid search (vector + FTS,      │
-   + listingId  │     filtered by listingId) → Cohere Rerank → top 5    │
-                │  app/api/analyze:   build cited context → Claude →    │
-                │     strict JSON { answer, riskFlags, financialMetrics,│
-                │     citations, confidence }  (+ low-confidence guard) │
-                │  UI: upload view, question box, results panel         │
-                └───────────────────────────────────────────────────────┘
-```
+Documents (PDF / URL / Text)
+        │
+        ├── /api/upload        pdf-parse → text
+        ├── /api/ingest-url    Jina reader → markdown
+        └── /api/ingest-text   raw text
+                │
+                └── lib/ingest.ts
+                      chunkText() → embedAll() → Neon pgvector
 
-### Request flow (analysis)
-1. User asks a question scoped to a `listingId`.
-2. [`lib/retrieval.ts`](lib/retrieval.ts) runs **hybrid retrieval** — pgvector cosine
-   similarity + Postgres full-text search on `content`, always filtered by
-   `listingId` — fuses them with Reciprocal Rank Fusion, then reranks the top ~20
-   candidates with **Cohere Rerank** and keeps the top 5.
-3. [`app/api/analyze/route.ts`](app/api/analyze/route.ts) → [`lib/analyze.ts`](lib/analyze.ts)
-   builds context from those chunks (carrying their metadata for citations) and
-   calls **Claude Sonnet** with a strict diligence-assistant system prompt and
-   forced, strict tool use that guarantees structured JSON output.
-4. **Guardrail:** if the top rerank score is below threshold, the route returns a
-   low-confidence *"not enough information"* response **without** calling the model
-   on weak context.
+Question + workspaceId
+        │
+        └── /api/analyze
+              │
+              ├── lib/retrieval.ts
+              │     pgvector cosine  ─┐
+              │     Postgres FTS      ├─ RRF → Cohere Rerank → top 5 chunks
+              │     (scoped to workspace)┘
+              │
+              └── lib/analyze.ts
+                    Build cited context → Claude Sonnet (strict tool use)
+                    → { answer, riskFlags, financialMetrics, citations, confidence }
+```
 
 ---
 
 ## Tech stack
 
-| Layer        | Choice                                                       |
-| ------------ | ----------------------------------------------------------- |
-| App / UI     | Next.js 16 (App Router) + TypeScript + Tailwind CSS v4       |
-| Database     | Neon Postgres + `pgvector`                                   |
-| ORM          | Prisma 7 (vector column via raw SQL; `@prisma/adapter-pg`)   |
-| Ingestion    | Python (`/ingestion`)                                        |
-| LLM          | Anthropic Claude — `claude-sonnet-4-6` (`@anthropic-ai/sdk`) |
-| Embeddings   | OpenAI `text-embedding-3-small` (1536 dims)                  |
-| Reranking    | Cohere Rerank (`rerank-v3.5`)                                |
+| Layer | Choice |
+|---|---|
+| App / UI | Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 · Framer Motion |
+| Database | Neon Postgres + `pgvector` (1536-dim) |
+| ORM | Prisma 7 · `@prisma/adapter-pg` · vector columns via raw SQL |
+| Ingestion | Node.js in-process · `pdf-parse` · Jina AI reader |
+| Analysis LLM | Anthropic `claude-sonnet-4-6` (structured output via strict tool use) |
+| Suggestions LLM | Anthropic `claude-haiku-4-5` |
+| Embeddings | OpenAI `text-embedding-3-small` (1536 dims) |
+| Reranking | Cohere `rerank-v3.5` |
+| Deployment | Vercel |
 
 ---
 
-## The three hard problems (and how this project handles them)
+## Setup
 
-1. **Table-aware chunking** — Financial tables are detected with
-   `pdfplumber.find_tables()`, extracted as a unit, and kept **intact as a single
-   chunk** with their section heading; table regions are removed from the prose so
-   figures aren't split across token windows or duplicated. Prose is chunked by
-   section to ~512 tokens with ~50 token overlap (counted with `tiktoken`). See
-   [`ingestion/ingest.py`](ingestion/ingest.py).
+### 1. Clone and install
 
-2. **Hybrid + rerank retrieval** — Vector similarity alone misses exact terms
-   (account names, line items); full-text alone misses paraphrase. We run both
-   (pgvector `<=>` cosine + Postgres `tsvector`), fuse with **Reciprocal Rank
-   Fusion**, then **Cohere Rerank** the merged candidates for precision. Always
-   scoped to one `listingId`. See [`lib/retrieval.ts`](lib/retrieval.ts).
+```bash
+git clone https://github.com/your-username/dealworthy.git
+cd dealworthy
+npm install
+```
 
-3. **Numerical reasoning with citations** — The model is instructed to extract the
-   relevant figures from the chunks *first*, state them explicitly, then reason —
-   and every output claim carries a citation back to a source document + page.
-   Structured output is guaranteed via Claude **strict tool use**. See
-   [`lib/analyze.ts`](lib/analyze.ts).
+### 2. Environment variables
 
-### The confidence guardrail
-Cohere returns a normalized relevance score per chunk. Before calling the LLM,
-the analyze route checks the **top rerank score**: if it's below
-`ANALYZE_MIN_SCORE` (default `0.05`), it returns an explicit *"not enough
-information"* response with `confidence: "low"` and **does not call the model**.
-Measured separation: legitimate questions score ~0.18–0.82 at the top; off-topic
-questions score ~0.01.
+```bash
+cp .env.example .env
+```
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Neon Postgres — use the **direct (unpooled)** connection string |
+| `OPENAI_API_KEY` | Embeddings at ingest and query time |
+| `ANTHROPIC_API_KEY` | Claude analysis + suggestion generation |
+| `COHERE_API_KEY` | Reranking |
+| `ANALYZE_MIN_SCORE` | *(optional)* guardrail threshold, default `0.05` |
+
+> **Neon tip:** in the Neon console's "Connect" dialog, turn **off** "Connection pooling" and copy the direct string. Prisma 7 requires a non-pooled URL.
+
+### 3. Apply the database migration
+
+```bash
+npx prisma migrate deploy
+npx prisma migrate status   # → "Database schema is up to date!"
+```
+
+### 4. Run the dev server
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). A demo dataset is pre-indexed under workspace `demo-listing-001` on the hosted version. Locally, switch to any workspace ID and upload your own documents.
+
+---
+
+## Ingestion API
+
+All three routes return the same shape:
+
+```json
+{ "ok": true, "indexed": [{ "title": "...", "chunks": 42 }], "totalChunks": 42 }
+```
+
+**PDF upload**
+```bash
+curl -X POST http://localhost:3000/api/upload \
+  -F "listingId=my-workspace" \
+  -F "files=@financials.pdf"
+```
+
+**URL import**
+```bash
+curl -X POST http://localhost:3000/api/ingest-url \
+  -H "Content-Type: application/json" \
+  -d '{"listingId":"my-workspace","url":"https://example.com/listing"}'
+```
+
+**Text paste**
+```bash
+curl -X POST http://localhost:3000/api/ingest-text \
+  -H "Content-Type: application/json" \
+  -d '{"listingId":"my-workspace","title":"Broker Email","text":"..."}'
+```
+
+---
+
+## Analysis API
+
+```bash
+curl -X POST http://localhost:3000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What are the main risks?","listingId":"my-workspace"}'
+```
+
+Response:
+
+```jsonc
+{
+  "answer": "…grounded prose…",
+  "riskFlags": [
+    { "severity": "red", "title": "Supplier concentration", "detail": "…" }
+  ],
+  "financialMetrics": {
+    "Revenue (FY2024)": "$1.52M",
+    "EBITDA (FY2024)": "$170k"
+  },
+  "citations": [
+    { "docTitle": "Financials.pdf", "page": 3, "snippet": "…" }
+  ],
+  "confidence": "high",
+  "meta": {
+    "model": "claude-sonnet-4-6",
+    "topScore": 0.66,
+    "guardrailTriggered": false,
+    "usedSources": [1, 2, 4]
+  }
+}
+```
 
 ---
 
 ## Project structure
 
 ```
-due-diligence-rag/
+dealworthy/
 ├── app/
-│   ├── api/analyze/route.ts     # POST { question, listingId } → analysis JSON
-│   ├── api/documents/route.ts   # GET ?listingId= → indexed documents
-│   ├── api/upload/route.ts      # POST PDFs → stage for ingestion (dev only)
-│   ├── layout.tsx, page.tsx     # app shell + tabbed UI
-│   └── globals.css
-├── components/                  # Disclaimer, AnalyzePanel, DocumentsPanel
+│   ├── api/
+│   │   ├── analyze/route.ts        # POST → analysis JSON
+│   │   ├── documents/route.ts      # GET  → indexed docs list
+│   │   ├── ingest-text/route.ts    # POST → index raw text
+│   │   ├── ingest-url/route.ts     # POST → fetch URL + index
+│   │   ├── suggestions/route.ts    # GET  → LLM-generated example questions
+│   │   └── upload/route.ts         # POST → index PDFs
+│   ├── settings/page.tsx           # theme picker
+│   ├── icon.tsx                    # favicon (generated via next/og)
+│   ├── apple-icon.tsx              # iOS touch icon (generated)
+│   ├── opengraph-image.tsx         # OG card (generated)
+│   ├── layout.tsx                  # root layout + no-flash theme script
+│   ├── page.tsx                    # main app shell + workspace logic
+│   └── globals.css                 # CSS custom properties + Tailwind v4 theme
+├── components/
+│   ├── AnalyzePanel.tsx            # question box + results + empty state
+│   ├── DocumentsPanel.tsx          # PDF / URL / text ingestion tabs
+│   ├── Disclaimer.tsx
+│   ├── Logo.tsx
+│   └── ThemeToggle.tsx
+├── context/
+│   └── ThemeContext.tsx            # light / dark / system + 5 accent presets
 ├── lib/
-│   ├── prisma.ts                # Prisma 7 client (driver adapter)
-│   ├── retrieval.ts             # hybrid search + Cohere rerank
-│   ├── analyze.ts               # retrieval → Claude → structured analysis
-│   └── types.ts                 # shared, runtime-free types
-├── prisma/
-│   ├── schema.prisma            # Document, Chunk, DocType
-│   └── migrations/…/migration.sql  # pgvector ext + vector(1536) + ivfflat + GIN
-├── prisma.config.ts             # Prisma 7 datasource config
-├── ingestion/
-│   ├── ingest.py                # PDF → chunks → embeddings → Postgres
-│   ├── requirements.txt
-│   └── sample_docs/             # synthetic test PDFs + generator
-├── .env.example                 # copy to .env and fill in
-└── README.md
+│   ├── analyze.ts                  # retrieval → Claude → structured output
+│   ├── ingest.ts                   # shared chunk / embed / store pipeline
+│   ├── prisma.ts                   # Prisma 7 client (driver adapter)
+│   ├── retrieval.ts                # hybrid search + Cohere rerank
+│   └── types.ts                    # shared TypeScript types
+└── prisma/
+    ├── schema.prisma
+    └── migrations/
 ```
 
 ---
 
-## Prerequisites
+## Deployment
 
-- **Node.js 20+** and npm
-- **Python 3.9+** (for the ingestion pipeline)
-- A **Neon Postgres** database (free tier is fine) — pgvector is enabled by the migration
-- API keys: **OpenAI**, **Anthropic**, **Cohere**
+Designed for Vercel. Everything runs serverless — no separate ingestion worker.
 
----
-
-## Setup
-
-### 1. Environment variables
-```bash
-cp .env.example .env
-```
-Fill in `.env` (never commit it — it's gitignored):
-
-| Key                 | Used for                                                        |
-| ------------------- | -------------------------------------------------------------- |
-| `DATABASE_URL`      | Neon Postgres — use the **direct/unpooled** connection string  |
-| `OPENAI_API_KEY`    | Embeddings (ingestion + query-time)                            |
-| `ANTHROPIC_API_KEY` | Claude analysis                                               |
-| `COHERE_API_KEY`    | Reranking                                                      |
-| `ANALYZE_MIN_SCORE` | *(optional)* guardrail threshold, default `0.05`               |
-
-> **Neon tip:** in the Neon console's "Connect" dialog, turn **off** "Connection
-> pooling" and copy the direct string (host without `-pooler`). Prisma 7 dropped
-> `directUrl`, so migrations use whatever `DATABASE_URL` points at.
-
-### 2. Install dependencies & apply the database migration
-```bash
-npm install                 # also runs `prisma generate` (postinstall)
-npx prisma migrate deploy   # creates tables, enables pgvector, builds ivfflat + GIN indexes
-npx prisma migrate status   # → "Database schema is up to date!"
-```
-
-### 3. Set up the Python ingestion pipeline
-```bash
-cd ingestion
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
-cd ..
-```
-
-### 4. Ingest documents
-The repo ships synthetic sample PDFs so you can test end-to-end immediately:
-```bash
-./ingestion/venv/bin/python ingestion/ingest.py \
-  --docs ./ingestion/sample_docs --listing-id demo-listing-001
-```
-For your own documents, point `--docs` at a folder of PDFs and choose a `--listing-id`.
-
-### 5. Start the app
-```bash
-npm run dev
-```
-Open http://localhost:3000, keep the listing as `demo-listing-001`, and ask a
-question (e.g. *"What were revenue, EBITDA, and net income over the last three
-years?"*).
-
----
-
-## Using the API directly
-
-```bash
-curl -s -X POST http://localhost:3000/api/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"question":"What are the main risks?","listingId":"demo-listing-001"}'
-```
-
-Response shape:
-```jsonc
-{
-  "answer": "…grounded prose…",
-  "riskFlags": [{ "severity": "red", "title": "…", "detail": "…" }],
-  "financialMetrics": { "Revenue (FY2025)": "$1.52M", "EBITDA (FY2025)": "$170k" },
-  "citations": [{ "docTitle": "Financials", "page": 1, "snippet": "…" }],
-  "confidence": "high",
-  "meta": { "model": "claude-sonnet-4-6", "topScore": 0.66, "guardrailTriggered": false, "usedSources": [] }
-}
-```
-
----
-
-## Deployment (Vercel)
-
-1. **Push to GitHub** and import the repo in Vercel (it auto-detects Next.js).
-2. **Set environment variables** in the Vercel project (Production + Preview):
-
-   | Variable            | Notes                                            |
-   | ------------------- | ------------------------------------------------ |
-   | `DATABASE_URL`      | Neon connection string (direct/unpooled)         |
-   | `OPENAI_API_KEY`    | embeddings                                        |
-   | `ANTHROPIC_API_KEY` | Claude                                            |
-   | `COHERE_API_KEY`    | rerank                                            |
-   | `ANALYZE_MIN_SCORE` | *(optional)* guardrail threshold                  |
-
-3. **Build** — `prisma generate` runs automatically via the `postinstall` script,
-   so the client is generated during Vercel's build. No extra build config needed.
-4. **Migrations** — run against the production database once (and on schema
-   changes): `npx prisma migrate deploy` locally with the prod `DATABASE_URL`, or
-   wire it into your release pipeline.
-5. **Ingestion is out-of-band.** The Python pipeline needs a real filesystem and a
-   Python `venv`, which don't exist on Vercel's serverless functions. The in-app
-   `/api/upload` route only **stages** PDFs to `./uploads/<listingId>` for local
-   indexing and is **guarded to no-op in serverless**. Run `ingestion/ingest.py`
-   from your machine, CI, or a worker with network access to the same
-   `DATABASE_URL`; the deployed app then serves analysis over that already-ingested
-   data.
+1. Push to GitHub and import the repo in Vercel (auto-detects Next.js).
+2. Add the four environment variables in Vercel project settings (Production + Preview).
+3. `prisma generate` runs automatically on every build via the `postinstall` script.
+4. Run `npx prisma migrate deploy` once against your production database.
+5. Deploy — then upload documents directly from the UI.
 
 ---
 
 ## Security notes
 
-- `.env` (and `.env.local`, `venv/`, `ingestion/uploads/`) are gitignored — only
-  the empty `.env.example` template is committed. Keep real keys out of any
-  committed file.
-- The analyze route uses parameterized `prisma.$queryRaw` (no string-built SQL),
-  and the upload route sanitizes filenames/listing ids before any filesystem use.
-- This app handles business documents — prefer a **private** repo and per-listing
-  access controls before exposing it beyond a demo.
+- `.env` and `.env.local` are gitignored — only `.env.example` is committed.
+- All database queries use parameterised Prisma calls or `$executeRawUnsafe` with positional `$N` bindings (no string-interpolated SQL).
+- Documents are scoped strictly to their `listingId`; cross-workspace access is not possible at the query level.
+- Consider a **private repo** and adding authentication before sharing with clients.
+
+---
+
+## License
+
+MIT
