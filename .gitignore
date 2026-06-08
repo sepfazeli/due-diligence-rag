@@ -26,6 +26,7 @@ __pycache__/
 *.pyc
 *.pyo
 /ingestion/venv/
+/ingestion/uploads/
 .venv/
 
 # ── OS / editor cruft ──
