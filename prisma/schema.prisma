@@ -1,0 +1,59 @@
+// Prisma schema for due-diligence-rag
+//
+// NOTE: the `embedding` column on Chunk is a pgvector `vector(1536)` type.
+// Prisma cannot model/query vectors natively, so it is declared here as an
+// `Unsupported` type (Prisma tracks the column so it won't try to drop it,
+// but we read/write it via raw SQL — `$queryRaw`). The pgvector extension,
+// the actual column, and the ivfflat cosine index are created in the raw
+// SQL migration under prisma/migrations/.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7: the connection URL lives in prisma.config.ts (datasource.url),
+  // not here. PrismaClient gets a driver adapter (configured in Phase 4).
+}
+
+enum DocType {
+  FINANCIALS
+  DISCLOSURE
+  LISTING
+  OTHER
+}
+
+model Document {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title      String
+  docType    DocType  @default(OTHER)
+  listingId  String
+  uploadedAt DateTime @default(now())
+  rawPath    String
+
+  chunks Chunk[]
+
+  // Re-ingesting the same titled doc for a listing updates it (upsert target).
+  @@unique([listingId, title])
+  @@index([listingId])
+}
+
+model Chunk {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String   @db.Uuid
+  content    String   @db.Text
+  page       Int
+  section    String
+  chunkIndex Int
+  createdAt  DateTime @default(now())
+
+  // pgvector column (vector(1536)). See note at top of file.
+  embedding Unsupported("vector(1536)")?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  // Upsert target for the Python ingestion pipeline (ON CONFLICT).
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+}
