@@ -1,0 +1,42 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ─────────────────────────────────────────────────────────────
+# Secrets — NEVER commit real values.
+# We ignore .env and its local variants, but intentionally KEEP
+# .env.example committed so collaborators know which keys to set.
+# ─────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ── Node / Next.js ──
+node_modules/
+/.next/
+/out/
+/build
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+.pnp
+.pnp.*
+
+# ── Python (ingestion pipeline) ──
+__pycache__/
+*.pyc
+*.pyo
+/ingestion/venv/
+.venv/
+
+# ── OS / editor cruft ──
+.DS_Store
+*.pem
+
+# ── Logs ──
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ── Testing ──
+/coverage

@@ -1,0 +1,8 @@
+anthropic
+openai
+cohere
+psycopg[binary]
+pgvector
+pdfplumber
+tiktoken
+python-dotenv
