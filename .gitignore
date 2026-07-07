@@ -42,3 +42,9 @@ yarn-error.log*
 
 # ── Testing ──
 /coverage
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
