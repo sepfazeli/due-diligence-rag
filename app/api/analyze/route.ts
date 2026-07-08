@@ -1,10 +1,15 @@
 import { analyze } from "@/lib/analyze";
+import { clientKey, rateLimit, rateLimitResponse, sweepExpired } from "@/lib/rate-limit";
 
 // Prisma + node-postgres require the Node.js runtime (not Edge).
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<Response> {
+  sweepExpired();
+  const rl = rateLimit(`analyze:${clientKey(req)}`, 10, 60_000); // 10 req/min per IP
+  if (!rl.ok) return rateLimitResponse(rl);
+
   let body: unknown;
   try {
     body = await req.json();

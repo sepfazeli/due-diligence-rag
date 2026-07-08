@@ -1,10 +1,15 @@
 import { prisma } from "@/lib/prisma";
+import { clientKey, rateLimit, rateLimitResponse, sweepExpired } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // GET /api/documents?listingId=... — list documents ingested for a listing.
 export async function GET(req: Request): Promise<Response> {
+  sweepExpired();
+  const rl = rateLimit(`documents:${clientKey(req)}`, 60, 60_000); // 60 req/min per IP
+  if (!rl.ok) return rateLimitResponse(rl);
+
   const listingId = new URL(req.url).searchParams.get("listingId");
   if (!listingId) {
     return Response.json({ error: "listingId query param is required" }, { status: 400 });
