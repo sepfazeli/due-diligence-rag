@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { clientKey, rateLimit, rateLimitResponse, sweepExpired } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +12,10 @@ export const dynamic = "force-dynamic";
 // filesystem), and shelling into ingestion/venv would pull that tree into the
 // build. Production ingestion runs separately — see the README.
 export async function POST(req: Request): Promise<Response> {
+  sweepExpired();
+  const rl = rateLimit(`upload:${clientKey(req)}`, 5, 60_000); // 5 req/min per IP
+  if (!rl.ok) return rateLimitResponse(rl);
+
   // Serverless filesystems are ephemeral/read-only — bail before any write.
   if (process.env.VERCEL || process.env.NEXT_RUNTIME === "edge") {
     return Response.json(
