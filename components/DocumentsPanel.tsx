@@ -35,6 +35,12 @@ export function DocumentsPanel({ listingId }: { listingId: string }) {
   }, [listingId]);
 
   useEffect(() => {
+    // Standard "fetch on mount" effect — loadDocs() sets `loadingList` before
+    // its first await so the spinner shows immediately. Data fetching is one
+    // of the cases https://react.dev/learn/you-might-not-need-an-effect
+    // explicitly says still needs an effect, so this is an intentional
+    // exception to the rule below, not a bug.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDocs();
   }, [loadDocs]);
 
